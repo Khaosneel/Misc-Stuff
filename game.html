@@ -1,0 +1,780 @@
+<!DOCTYPE html><html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RPG Prototype</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #0b0f1a;
+  color: #d9e1ff;
+  font-family: monospace;
+}
+h1,h2,h3,p { margin: 6px 0; }
+button, select {
+  background: #1b2440;
+  color: #d9e1ff;
+  border: 1px solid #5463b8;
+  padding: 8px;
+  cursor: pointer;
+  font-family: monospace;
+}
+button:hover { background: #27325a; }
+.container {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 12px;
+  padding: 12px;
+}
+.panel {
+  background: #11182b;
+  border: 1px solid #304070;
+  padding: 10px;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bar {
+  width: 100%;
+  height: 18px;
+  background: #1d2440;
+  border: 1px solid #4256a6;
+  position: relative;
+  margin-bottom: 6px;
+}
+.fill {
+  height: 100%;
+  background: #6b7cff;
+}
+.hp { background: #ff5a7a; }
+.mp { background: #6d9dff; }
+.atb { background: #a86cff; }
+.meter { background: #ffe066; }
+.bar span {
+  position: absolute;
+  width: 100%;
+  left: 0;
+  top: 0;
+  text-align: center;
+  font-size: 11px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.log {
+  height: 240px;
+  overflow-y: auto;
+  background: #090d17;
+  padding: 8px;
+  border: 1px solid #304070;
+  font-size: 12px;
+}
+.card {
+  border: 1px solid #3b4f9d;
+  padding: 6px;
+  background: #151d35;
+}
+.selected {
+  outline: 2px solid #b2bcff;
+}
+.enemy-area {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(240px,1fr));
+  gap: 10px;
+}
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.timer {
+  color: #ffe066;
+  font-size: 18px;
+}
+.small { font-size: 11px; color: #8ca0ff; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="panel">
+    <h2>CONFIG</h2><label>Mode</label>
+<select id="mode">
+  <option>Quick Match</option>
+  <option>Dual Mode</option>
+  <option>Gauntlet</option>
+  <option>Boss Mode</option>
+</select>
+
+<label>ATB Speed</label>
+<select id="speed">
+  <option>Slow</option>
+  <option selected>Normal</option>
+  <option>Fast</option>
+  <option>Off</option>
+</select>
+
+<h3>Class</h3>
+<div id="classes"></div>
+
+<h3>Pick 3 Spells</h3>
+<div id="spells" class="grid"></div>
+
+<h3>HP Item</h3>
+<div id="hpItems"></div>
+
+<h3>MP Item</h3>
+<div id="mpItems"></div>
+
+<h3>Passive</h3>
+<div id="passives"></div>
+
+<button id="startBtn">START RUN</button>
+
+  </div>  <div class="panel">
+    <h1>RPG PROTOTYPE</h1><div id="battleUI" style="display:none;">
+  <div class="row">
+    <div class="panel" style="flex:1;">
+      <h3>PLAYER</h3>
+      <div id="playerStats"></div>
+    </div>
+    <div class="panel" style="flex:1;">
+      <h3>ENEMIES</h3>
+      <div id="enemyStats" class="enemy-area"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="timer">ACTION TIMER: <span id="timer">0</span></div>
+    <div class="action-buttons" id="actions"></div>
+  </div>
+
+  <div class="log" id="log"></div>
+</div>
+
+  </div>
+</div><script>
+const classes = {
+  Vanguard: {
+    hp: 550, mp: 180, def: 80, agi: 10, lck: 0, dmg: 0,
+    element: 'Fire',
+    passiveText: 'Heavy Arms',
+    passive: unit => unit.damageReduction += 0.12,
+    action: {
+      name: 'Bladework', cost: 30,
+      use: (user, target) => {
+        let dmg = 80 + user.def * 0.2;
+        dealDamage(user, target, dmg, 'Fire');
+      }
+    }
+  },
+  Dancer: {
+    hp: 500, mp: 200, def: 50, agi: 18, lck: 0, dmg: 0,
+    element: 'Wind',
+    passiveText: 'Aspir',
+    passive: unit => unit.onHitHeal = 5,
+    action: {
+      name: 'Saber Dance', cost: 35,
+      use: (user, target) => {
+        let dealt = dealDamage(user, target, 120, 'Wind');
+        heal(user, dealt * 0.2);
+      }
+    }
+  },
+  Henshin: {
+    hp: 500, mp: 210, def: 60, agi: 14, lck: 0, dmg: 0,
+    element: 'Dark',
+    passiveText: 'Dual Nature',
+    passive: unit => unit.dualNature = true,
+    action: {
+      name: 'Henshin', costMeter: 100,
+      use: (user) => {
+        user.buffs.push({ type:'henshin', turns:3 });
+        user.meter = 0;
+        log(`${user.name} activates Henshin.`);
+      }
+    }
+  },
+  Technomancer: {
+    hp: 450, mp: 250, def: 40, agi: 16, lck: 0, dmg: 0,
+    element: 'Light',
+    passiveText: 'Arcane Mastery',
+    passive: unit => unit.mpDiscount = 0.12,
+    action: {
+      name: 'Overclock', cost: 25,
+      use: (user) => {
+        user.overclock = 2;
+        log(`${user.name} is Overclocked.`);
+      }
+    }
+  }
+};
+
+const spells = {
+  Lunge:{cost:15, dmg:80, element:'Dark', aoe:true, gear:{dmg:10,def:15}},
+  Transform:{cost:20, buff:'transform', element:'Dark', gear:{mp:35,agi:8}},
+  Overload:{cost:20, buff:'overload', element:'Light', gear:{mp:35,lck:5}},
+  Waltz:{cost:15, dmg:80, lifesteal:15, element:'Wind', gear:{hp:45,agi:8}},
+  Fire:{cost:15, dmg:100, burn:20, element:'Fire', gear:{dmg:8,lck:4}},
+  Ice:{cost:15, dmg:100, slow:2, element:'Ice', gear:{def:12,agi:6}},
+  Thunder:{cost:18, dmg:120, stun:1, element:'Thunder', gear:{lck:4,dmg:8}},
+  Stone:{cost:15, dmg:100, element:'Earth', gear:{agi:6,hp:35}},
+  Fira:{cost:30, dmg:200, burn:30, element:'Fire', gear:{dmg:15,lck:6}},
+  Blizzara:{cost:30, dmg:200, slow:2, element:'Ice', gear:{def:20,hp:55}},
+  Thundara:{cost:30, dmg:220, stun:1, element:'Thunder', gear:{lck:6,agi:10}},
+  Waterga:{cost:35, dmg:150, aoe:true, element:'Water', gear:{hp:55,mp:35}},
+};
+
+const hpItems = {
+  Cure:{charges:3, use:(u)=>heal(u,250), gear:{def:10,hp:30}},
+  Regen:{charges:3, use:(u)=>u.buffs.push({type:'regen', turns:3}), gear:{agi:8,hp:25}}
+};
+
+const mpItems = {
+  Ether:{charges:3, use:(u)=>u.mp=Math.min(u.maxMp,u.mp+50), gear:{lck:4,mp:25}},
+  Refresh:{charges:3, use:(u)=>u.buffs.push({type:'refresh', turns:3}), gear:{dmg:6,mp:20}}
+};
+
+const passives = {
+  Protect:{gear:{def:18,agi:8,hp:40}, apply:u=>u.damageReduction += 0.10},
+  Berserk:{gear:{dmg:15,lck:6,mp:30}, apply:u=>u.damageBonus += 0.10},
+  Counter:{gear:{lck:5,def:15,mp:25}, apply:u=>u.counter = true},
+  Swiftness:{gear:{agi:12,dmg:10,hp:35}, apply:u=>u.swift = true},
+};
+
+const enemies = [
+  {name:'Fire Bot', hp:400, weak:'Ice', resist:'Fire', power:85, element:'Fire'},
+  {name:'Ice Bot', hp:400, weak:'Fire', resist:'Ice', power:85, element:'Ice'},
+  {name:'Thunder Bot', hp:420, weak:'Earth', resist:'Thunder', power:95, element:'Thunder'},
+  {name:'Wind Bot', hp:380, weak:'Thunder', resist:'Wind', power:80, element:'Wind'},
+  {name:'Dark Bot', hp:520, weak:'Light', resist:'Dark', power:105, element:'Dark'},
+  {name:'Light Bot', hp:500, weak:'Dark', resist:'Light', power:100, element:'Light'},
+];
+
+let selectedClass = 'Vanguard';
+let selectedSpells = [];
+let selectedHP = 'Cure';
+let selectedMP = 'Ether';
+let selectedPassive = 'Protect';
+let player;
+let currentEnemies = [];
+let currentFight = 0;
+let totalFights = 1;
+let playerTurn = true;
+let timerInt;
+let actionTimer = 8;
+
+function setupSelections() {
+  const classDiv = document.getElementById('classes');
+  classDiv.innerHTML = '';
+  Object.keys(classes).forEach(name => {
+    const b = document.createElement('button');
+    b.textContent = name;
+    if(name===selectedClass) b.classList.add('selected');
+    b.onclick = ()=>{
+      selectedClass=name;
+      setupSelections();
+    };
+    classDiv.appendChild(b);
+  });
+
+  const spellDiv = document.getElementById('spells');
+  spellDiv.innerHTML='';
+  Object.keys(spells).forEach(name=>{
+    const c=document.createElement('div');
+    c.className='card';
+    if(selectedSpells.includes(name)) c.classList.add('selected');
+    c.innerHTML=`<b>${name}</b><br>${JSON.stringify(spells[name].gear)}`;
+    c.onclick=()=>{
+      if(selectedSpells.includes(name)) selectedSpells=selectedSpells.filter(x=>x!==name);
+      else if(selectedSpells.length<3) selectedSpells.push(name);
+      setupSelections();
+    };
+    spellDiv.appendChild(c);
+  });
+
+  renderSimple('hpItems', hpItems, selectedHP, v=>selectedHP=v);
+  renderSimple('mpItems', mpItems, selectedMP, v=>selectedMP=v);
+  renderSimple('passives', passives, selectedPassive, v=>selectedPassive=v);
+}
+
+function renderSimple(id,obj,selected,cb){
+  const el=document.getElementById(id);
+  el.innerHTML='';
+  Object.keys(obj).forEach(name=>{
+    const b=document.createElement('button');
+    b.textContent=name;
+    if(name===selected) b.classList.add('selected');
+    b.onclick=()=>{cb(name);setupSelections();};
+    el.appendChild(b);
+  });
+}
+
+function createPlayer(){
+  const base=classes[selectedClass];
+  const unit={
+    name:selectedClass,
+    className:selectedClass,
+    maxHp:base.hp,
+    hp:base.hp,
+    maxMp:base.mp,
+    mp:base.mp,
+    def:base.def,
+    agi:base.agi,
+    lck:base.lck,
+    damageBonus:0,
+    damageReduction:0,
+    crit:20,
+    spells:[...selectedSpells],
+    hpItem:selectedHP,
+    mpItem:selectedMP,
+    hpCharges:3,
+    mpCharges:3,
+    passive:selectedPassive,
+    buffs:[],
+    meter:0,
+    maxMeter:100,
+    overclock:0,
+    element:base.element,
+  };
+
+  applyGear(unit);
+  base.passive(unit);
+  passives[selectedPassive].apply(unit);
+  unit.crit += unit.lck * 2;
+  return unit;
+}
+
+function applyGear(unit){
+  const all = [
+    ...unit.spells.map(s=>spells[s].gear),
+    hpItems[unit.hpItem].gear,
+    mpItems[unit.mpItem].gear,
+    passives[unit.passive].gear
+  ];
+
+  all.forEach(g=>{
+    if(g.hp) unit.maxHp += g.hp;
+    if(g.mp) unit.maxMp += g.mp;
+    if(g.def) unit.def += g.def;
+    if(g.agi) unit.agi += g.agi;
+    if(g.lck) unit.lck += g.lck;
+    if(g.dmg) unit.damageBonus += g.dmg/100;
+  });
+
+  unit.hp = unit.maxHp;
+  unit.mp = unit.maxMp;
+}
+
+function randomEnemy(){
+  const base = JSON.parse(JSON.stringify(enemies[Math.floor(Math.random()*enemies.length)]));
+  const cls = Object.keys(classes)[Math.floor(Math.random()*4)];
+  const passive = Object.keys(passives)[Math.floor(Math.random()*4)];
+  const spellList = Object.keys(spells).sort(()=>Math.random()-0.5).slice(0,3);
+  const hpPick = Math.random()>0.5 ? 'Cure':'Regen';
+  const mpPick = Math.random()>0.5 ? 'Ether':'Refresh';
+
+  const e={
+    name:base.name,
+    maxHp:base.hp,
+    hp:base.hp,
+    maxMp:160,
+    mp:160,
+    def:30,
+    agi:10,
+    lck:0,
+    damageBonus:0,
+    damageReduction:0,
+    crit:15,
+    buffs:[],
+    spells:spellList,
+    hpItem:hpPick,
+    mpItem:mpPick,
+    hpCharges:3,
+    mpCharges:3,
+    passive,
+    className:cls,
+    action:classes[cls].action,
+    power:base.power,
+    weak:base.weak,
+    resist:base.resist,
+    meter:0,
+    element:base.element,
+  };
+
+  passives[passive].apply(e);
+  return e;
+}
+
+function startGame(){
+  if(selectedSpells.length !== 3){
+    alert('Pick exactly 3 spells');
+    return;
+  }
+
+  player=createPlayer();
+
+  const mode=document.getElementById('mode').value;
+  totalFights = mode==='Quick Match'?1:mode==='Boss Mode'?1:3;
+  currentFight=0;
+  document.getElementById('battleUI').style.display='block';
+  nextFight();
+}
+
+function nextFight(){
+  currentFight++;
+  currentEnemies=[];
+
+  const mode=document.getElementById('mode').value;
+
+  if(mode==='Gauntlet'){
+    currentEnemies=[randomEnemy(), randomEnemy()];
+  } else if(mode==='Boss Mode'){
+    let boss=randomEnemy();
+    boss.maxHp=900;
+    boss.hp=900;
+    boss.power += 40;
+    currentEnemies=[boss];
+  } else {
+    currentEnemies=[randomEnemy()];
+  }
+
+  log(`--- FIGHT ${currentFight}/${totalFights} ---`);
+  render();
+  beginPlayerTurn();
+}
+
+function render(){
+  document.getElementById('playerStats').innerHTML = renderUnit(player, true);
+
+  document.getElementById('enemyStats').innerHTML = currentEnemies.map((e,i)=>`
+    <div class='card'>
+      ${renderUnit(e,false)}
+      <button onclick='targetEnemy(${i})'>Target</button>
+    </div>
+  `).join('');
+
+  renderActions();
+}
+
+let targetIndex=0;
+function targetEnemy(i){ targetIndex=i; }
+
+function renderUnit(u,isPlayer){
+  return `
+    <div><b>${u.name}</b></div>
+    ${bar(u.hp,u.maxHp,'hp')}
+    ${bar(u.mp,u.maxMp,'mp')}
+    ${isPlayer && u.className==='Henshin' ? bar(u.meter,u.maxMeter,'meter') : ''}
+    <div class='small'>DEF ${u.def} | AGI ${u.agi} | CRIT ${u.crit}% | DMG ${Math.round(u.damageBonus*100)}%</div>
+    <div class='small'>Buffs: ${u.buffs.map(b=>b.type+'('+b.turns+')').join(', ') || 'None'}</div>
+  `;
+}
+
+function bar(v,m,cls){
+  const pct=Math.max(0,(v/m)*100);
+  return `<div class='bar'><div class='fill ${cls}' style='width:${pct}%'></div><span>${Math.floor(v)}/${m}</span></div>`;
+}
+
+function renderActions(){
+  const el=document.getElementById('actions');
+  el.innerHTML='';
+
+  if(!playerTurn) return;
+
+  player.spells.forEach(s=>{
+    const b=document.createElement('button');
+    b.textContent=`${s} (${spells[s].cost} MP)`;
+    b.onclick=()=>castSpell(player, currentEnemies[targetIndex], s);
+    el.appendChild(b);
+  });
+
+  const classBtn=document.createElement('button');
+  classBtn.textContent=classes[player.className].action.name;
+  classBtn.onclick=()=>useClassAction();
+  el.appendChild(classBtn);
+
+  const hp=document.createElement('button');
+  hp.textContent=`${player.hpItem} x${player.hpCharges}`;
+  hp.onclick=()=>useItem('hp');
+  el.appendChild(hp);
+
+  const mp=document.createElement('button');
+  mp.textContent=`${player.mpItem} x${player.mpCharges}`;
+  mp.onclick=()=>useItem('mp');
+  el.appendChild(mp);
+}
+
+function useClassAction(){
+  const a=classes[player.className].action;
+
+  if(a.cost && player.mp < a.cost) return log('Not enough MP');
+  if(a.costMeter && player.meter < a.costMeter) return log('Need more meter');
+
+  if(a.cost) player.mp -= a.cost;
+
+  a.use(player, currentEnemies[targetIndex]);
+  endPlayerTurn();
+}
+
+function useItem(type){
+  if(type==='hp'){
+    if(player.hpCharges<=0) return;
+    hpItems[player.hpItem].use(player);
+    player.hpCharges--;
+  } else {
+    if(player.mpCharges<=0) return;
+    mpItems[player.mpItem].use(player);
+    player.mpCharges--;
+  }
+  render();
+  endPlayerTurn();
+}
+
+function castSpell(user,target,name){
+  const s=spells[name];
+  let cost=s.cost;
+
+  if(user.mpDiscount) cost *= (1-user.mpDiscount);
+
+  if(user.mp < cost) return log('Not enough MP');
+  user.mp -= cost;
+
+  let dmg=s.dmg || 0;
+
+  if(name==='Lunge'){
+    dmg += user.def * (user.className==='Vanguard'?0.2:0.15);
+  }
+
+  if(user.overclock>0){
+    dmg += user.maxMp * 0.2;
+    user.overclock--;
+  }
+
+  if(user.buffs.some(b=>b.type==='transform')) dmg *= 1.15;
+  if(user.buffs.some(b=>b.type==='henshin')) dmg *= 1.25;
+
+  if(s.buff==='transform'){
+    user.buffs.push({type:'transform', turns:user.className==='Henshin'?3:2});
+    log(`${user.name} transforms.`);
+  }
+
+  if(s.buff==='overload'){
+    user.overload=true;
+    log(`${user.name} charges power.`);
+  }
+
+  if(s.aoe){
+    currentEnemies.forEach(e=>{
+      if(e.hp>0) applySpellEffects(user,e,s,dmg);
+    });
+  } else {
+    applySpellEffects(user,target,s,dmg);
+  }
+
+  render();
+  if(user===player) endPlayerTurn();
+}
+
+function applySpellEffects(user,target,s,dmg){
+  if(dmg>0) {
+    let dealt=dealDamage(user,target,dmg,s.element);
+
+    if(s.lifesteal){
+      let ls=s.lifesteal;
+      if(user.className==='Dancer') ls=20;
+      heal(user,dealt*(ls/100));
+    }
+  }
+
+  const resistTurns=Math.max(0, Math.ceil(target.agi/10));
+
+  if(s.burn){
+    const turns=Math.max(0,2-resistTurns);
+    if(turns>0) target.buffs.push({type:'burn', value:s.burn, turns});
+  }
+
+  if(s.slow){
+    const turns=Math.max(0,2-resistTurns);
+    if(turns>0) target.buffs.push({type:'slow', turns});
+  }
+
+  if(s.stun){
+    const turns=Math.max(0,1-resistTurns);
+    if(turns>0) target.buffs.push({type:'stun', turns});
+  }
+}
+
+function dealDamage(attacker,target,base,element){
+  let dmg=base;
+
+  if(attacker.damageBonus) dmg *= (1+attacker.damageBonus);
+
+  if(attacker.overload){
+    dmg += attacker.maxMp*0.12;
+    attacker.overload=false;
+  }
+
+  if(target.weak===element) dmg*=2;
+  if(target.resist===element) dmg*=0.5;
+
+  let crit=false;
+  if(Math.random()*100 < attacker.crit){
+    crit=true;
+    dmg*=1.5;
+  }
+
+  dmg = Math.max(1, dmg-target.def);
+
+  if(target.damageReduction) dmg *= (1-target.damageReduction);
+  if(target.buffs.some(b=>b.type==='henshin')) dmg *= 0.9;
+
+  target.hp -= dmg;
+
+  if(attacker.onHitHeal) heal(attacker, attacker.onHitHeal);
+
+  if(attacker.dualNature){
+    attacker.meter=Math.min(100, attacker.meter+10);
+  }
+
+  if(target.dualNature){
+    target.meter=Math.min(100, target.meter+10);
+  }
+
+  log(`${attacker.name} hits ${target.name} for ${Math.floor(dmg)} ${element} damage${crit?' CRIT':''}`);
+
+  if(target.counter && Math.random()<0.2 && target.hp>0){
+    log(`${target.name} counters.`);
+    dealDamage(target, attacker, 60, target.element);
+  }
+
+  if(target.hp<=0){
+    target.hp=0;
+    log(`${target.name} destroyed.`);
+  }
+
+  render();
+  checkBattleEnd();
+  return dmg;
+}
+
+function heal(u,amt){
+  u.hp=Math.min(u.maxHp,u.hp+amt);
+  log(`${u.name} heals ${Math.floor(amt)} HP`);
+}
+
+function log(t){
+  const l=document.getElementById('log');
+  l.innerHTML += t+'<br>';
+  l.scrollTop=l.scrollHeight;
+}
+
+function processBuffs(u){
+  u.buffs.forEach(b=>{
+    if(b.type==='burn') {
+      u.hp -= b.value;
+      log(`${u.name} takes ${b.value} burn damage.`);
+    }
+    if(b.type==='regen') heal(u,70);
+    if(b.type==='refresh') {
+      u.mp=Math.min(u.maxMp,u.mp+20);
+      log(`${u.name} restores MP.`);
+    }
+    b.turns--;
+  });
+
+  u.buffs=u.buffs.filter(b=>b.turns>0);
+}
+
+function beginPlayerTurn(){
+  playerTurn=true;
+  render();
+
+  if(document.getElementById('speed').value==='Off') return;
+
+  actionTimer=8;
+  document.getElementById('timer').textContent=actionTimer;
+
+  clearInterval(timerInt);
+  timerInt=setInterval(()=>{
+    actionTimer--;
+    document.getElementById('timer').textContent=actionTimer;
+
+    if(actionTimer<=0){
+      clearInterval(timerInt);
+      log('Player timeout.');
+      endPlayerTurn();
+    }
+  },1000/getSpeedMultiplier());
+}
+
+function getSpeedMultiplier(){
+  const s=document.getElementById('speed').value;
+  if(s==='Slow') return 0.7;
+  if(s==='Fast') return 1.5;
+  return 1;
+}
+
+function endPlayerTurn(){
+  clearInterval(timerInt);
+  playerTurn=false;
+  processBuffs(player);
+  enemyTurn();
+}
+
+function enemyTurn(){
+  currentEnemies.forEach(e=>{
+    if(e.hp<=0) return;
+
+    processBuffs(e);
+
+    if(e.buffs.some(b=>b.type==='stun')){
+      log(`${e.name} is stunned.`);
+      return;
+    }
+
+    const choice=Math.random();
+
+    if(choice<0.15 && e.hpCharges>0){
+      hpItems[e.hpItem].use(e);
+      e.hpCharges--;
+    } else if(choice<0.3 && e.mpCharges>0){
+      mpItems[e.mpItem].use(e);
+      e.mpCharges--;
+    } else if(choice<0.5){
+      castSpell(e,player,e.spells[Math.floor(Math.random()*e.spells.length)]);
+    } else {
+      dealDamage(e,player,e.power,e.element);
+    }
+  });
+
+  if(player.hp>0){
+    beginPlayerTurn();
+  }
+}
+
+function checkBattleEnd(){
+  if(player.hp<=0){
+    log('GAME OVER');
+    clearInterval(timerInt);
+    return;
+  }
+
+  if(currentEnemies.every(e=>e.hp<=0)){
+    if(currentFight>=totalFights){
+      log('RUN COMPLETE');
+      clearInterval(timerInt);
+    } else {
+      setTimeout(nextFight,1000);
+    }
+  }
+}
+
+document.getElementById('startBtn').onclick=startGame;
+setupSelections();
+</script></body>
+</html>
