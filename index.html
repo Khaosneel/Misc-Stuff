@@ -319,6 +319,19 @@
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
+        if (isPlaying && !isCountingDown) {
+            // ONLY accumulate time when the countdown is finished!
+            accumulator += dt;
+
+            while (accumulator >= FIXED_TIME_STEP) {
+                updatePhysicsFixed();
+                accumulator -= FIXED_TIME_STEP;
+            }
+        } else {
+            // Prevent "Time Debt" by keeping it at 0 during the countdown
+            accumulator = 0; 
+        }
+
         // Draw video background
         if (lastVideoFrame) {
             ctx.save();
