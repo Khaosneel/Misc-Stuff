@@ -193,6 +193,9 @@
     let lastVideoFrame = null;
     let modelLoaded = false;
     let gameRequested = false;
+    // Add this near your other variables
+    const FIXED_TIME_STEP = 1000 / 60; // Exactly 60 updates per second (16.66ms)
+    let accumulator = 0;
 
     // Standard connections mapping for a skeleton hand
     const HAND_CONNECTIONS = [
@@ -304,19 +307,19 @@
 
     // --- Rendering Loop ---
     function gameLoop(timestamp) {
-        // Calculate Delta Time
         if (!lastTime) lastTime = timestamp;
-        let deltaTime = timestamp - lastTime;
+        let dt = timestamp - lastTime;
+        
+        // Prevent huge jumps if the browser tabs out or lags hard
+        if (dt > 100) dt = 100; 
         lastTime = timestamp;
 
-        // Cap deltaTime to prevent massive physics jumps if the user switches browser tabs
-        if (deltaTime > 100) deltaTime = 16; 
-
-        // Apply our scale to keep the math numbers manageable
-        const dt = deltaTime * TIME_SCALE; 
+        // Accumulate time for fixed-step physics
+        accumulator += dt;
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
+        // Draw video background
         if (lastVideoFrame) {
             ctx.save();
             ctx.translate(canvas.width, 0);
@@ -327,45 +330,47 @@
             ctx.restore();
         }
 
-        if (isPlaying) {
-            if (!isCountingDown) {
-                updatePhysics(dt); // Pass dt to the physics engine
+        if (isPlaying && !isCountingDown) {
+            // Run physics in identical, locked 16.6ms chunks across all devices (PC & Phone)
+            while (accumulator >= FIXED_TIME_STEP) {
+                updatePhysicsFixed();
+                accumulator -= FIXED_TIME_STEP;
             }
+        }
+
+        if (isPlaying) {
             drawBall();
         }
         
         drawHands();
 
+        // Countdown Overlay Rendering
         if (isCountingDown) {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height); // Dim the background
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             ctx.fillStyle = '#ff0055';
             ctx.font = 'bold 120px "Segoe UI", Tahoma, Geneva, Verdana, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            
-            // Add a neon glow effect to the text
             ctx.shadowBlur = 30;
             ctx.shadowColor = '#ff0055';
             
             ctx.fillText(countdownValue, canvas.width / 2, canvas.height / 2);
             
-            ctx.shadowBlur = 0; // Reset shadow so it doesn't affect other drawings
+            ctx.shadowBlur = 0;
         }
 
         requestAnimationFrame(gameLoop);
     }
 
-    function updatePhysics(dt) {
-        // Difficulty scaling (scale this by dt too!)
-        const currentGravity = (ball.gravity + (score * 0.015)) * dt;
+    function updatePhysicsFixed() {
+        // Difficulty scaling (clean, fixed increment per frame)
+        const currentGravity = ball.gravity + (score * 0.015);
         
         ball.vy += currentGravity;
-        
-        // Multiply velocity by dt when applying it to position
-        ball.x += ball.vx * dt;
-        ball.y += ball.vy * dt;
+        ball.x += ball.vx;
+        ball.y += ball.vy;
         
         ball.history.push({x: ball.x, y: ball.y});
         if (ball.history.length > 8) ball.history.shift();
@@ -385,6 +390,7 @@
             ball.vy = Math.abs(ball.vy) * 0.5; 
         }
 
+        // Hand collisions
         let hit = false;
         for (const hand of handsData) {
             for (const pt of hand) {
@@ -400,6 +406,7 @@
                     ball.vx += (dx / dist) * 6; 
                     ball.vx = Math.max(-12, Math.min(12, ball.vx)); 
                     
+                    playSound('bounce');
                     score++;
                     document.getElementById('score').innerText = score;
                     hit = true;
@@ -414,6 +421,7 @@
             if(hit) break;
         }
 
+        // Death Floor
         if (ball.y - ball.radius > canvas.height) gameOver();
     }
 
