@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Air Juggler - Gesture Game</title>
+
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b0c10;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            aspect-ratio: 4/3;
+            box-shadow: 0 0 40px rgba(102, 252, 241, 0.15);
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: #111;
+            border: 2px solid #45a29e;
+        }
+
+        video { display: none; /* Hidden, we draw it manually to the canvas */ }
+        
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .hud {
+            display: flex;
+            justify-content: space-between;
+            padding: 15px 25px;
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        }
+
+        .score-box {
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px 18px;
+            border-radius: 8px;
+            border: 1px solid #66fcf1;
+            box-shadow: 0 0 10px rgba(102, 252, 241, 0.2);
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(11, 12, 16, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            z-index: 20;
+            backdrop-filter: blur(4px);
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 52px;
+            color: #66fcf1;
+            text-shadow: 0 0 15px #66fcf1, 0 0 30px #45a29e;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        p {
+            font-size: 18px;
+            margin-bottom: 30px;
+            text-align: center;
+            max-width: 80%;
+            color: #c5c6c7;
+            line-height: 1.5;
+        }
+
+        button {
+            padding: 15px 40px;
+            font-size: 22px;
+            cursor: pointer;
+            background: rgba(11, 12, 16, 0.8);
+            color: #66fcf1;
+            border: 2px solid #66fcf1;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 0 15px rgba(102, 252, 241, 0.3) inset;
+        }
+
+        button:hover {
+            background: #66fcf1;
+            color: #0b0c10;
+            box-shadow: 0 0 25px rgba(102, 252, 241, 0.6);
+            transform: translateY(-3px);
+        }
+
+        .loading-text {
+            font-size: 20px;
+            color: #ff0055;
+            display: none;
+            margin-top: 20px;
+            animation: pulse 1.5s infinite;
+            text-shadow: 0 0 10px #ff0055;
+            font-weight: bold;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    
+    <div id="ui-layer">
+        <div class="hud">
+            <div class="score-box">Score: <span id="score">0</span></div>
+            <div class="score-box">High: <span id="highscore">0</span></div>
+        </div>
+    </div>
+    
+    <div id="overlay">
+        <h1 id="title">Air Juggler</h1>
+        <p id="message">Use your hands in front of the webcam to juggle the ball.<br>Keep it from falling off the screen!</p>
+        <button id="startBtn">Start Game</button>
+        <div id="loading" class="loading-text">Loading AI Model & Camera...</div>
+    </div>
+</div>
+
+<script>
+    // --- Game State & UI ---
+    let isPlaying = false;
+    let score = 0;
+    let highScore = 0;
+    
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const videoElement = document.getElementById('video');
+    
+    // --- Physics Entity ---
+    let ball = { x: 0, y: 0, vx: 0, vy: 0, radius: 20, gravity: 0.35, color: '#66fcf1', pulse: 0, history: [] };
+    
+    // --- MediaPipe Hand Tracking Setup ---
+    let handsData = [];
+    let lastVideoFrame = null;
+    let modelLoaded = false;
+    let gameRequested = false;
+
+    // Standard connections mapping for a skeleton hand
+    const HAND_CONNECTIONS = [
+        [0,1], [1,2], [2,3], [3,4],       // Thumb
+        [0,5], [5,6], [6,7], [7,8],       // Index
+        [5,9], [9,10], [10,11], [11,12],  // Middle
+        [9,13], [13,14], [14,15], [15,16], // Ring
+        [13,17], [17,18], [18,19], [19,20], // Pinky
+        [0,17]                            // Palm base
+    ];
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+    
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1, // 0=fast, 1=accurate
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+    
+    hands.onResults((results) => {
+        handsData = results.multiHandLandmarks || [];
+        lastVideoFrame = results.image;
+        
+        // Triggers game start only after the model processes the first frame
+        if (!modelLoaded) {
+            modelLoaded = true;
+            if (gameRequested) startGame();
+        }
+    });
+    
+    const camera = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 800, height: 600
+    });
+
+    // --- Game Logic ---
+    document.getElementById('startBtn').addEventListener('click', () => {
+        document.getElementById('startBtn').style.display = 'none';
+        document.getElementById('loading').style.display = 'block';
+        gameRequested = true;
+        
+        if (!videoElement.srcObject) {
+            camera.start().catch(() => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('startBtn').style.display = 'block';
+                document.getElementById('message').innerText = "Camera access denied. Please refresh and allow permissions.";
+                gameRequested = false;
+            });
+        } else if (modelLoaded) {
+            startGame();
+        }
+    });
+
+    function startGame() {
+        document.getElementById('overlay').style.display = 'none';
+        score = 0;
+        document.getElementById('score').innerText = score;
+        
+        ball = {
+            x: canvas.width / 2,
+            y: 50,
+            vx: (Math.random() - 0.5) * 8,
+            vy: 2,
+            radius: 25,
+            gravity: 0.35,
+            color: '#66fcf1',
+            pulse: 0,
+            history: []
+        };
+        isPlaying = true;
+    }
+
+    function gameOver() {
+        isPlaying = false;
+        document.getElementById('overlay').style.display = 'flex';
+        document.getElementById('title').innerText = "Game Over!";
+        document.getElementById('message').innerText = `You juggled the ball ${score} times.`;
+        document.getElementById('startBtn').style.display = 'block';
+        document.getElementById('startBtn').innerText = "Play Again";
+        
+        if (score > highScore) {
+            highScore = score;
+            document.getElementById('highscore').innerText = highScore;
+        }
+    }
+
+    // --- Rendering Loop ---
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw Flipped Video Background (Mirrors player movement intuitively)
+        if (lastVideoFrame) {
+            ctx.save();
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(lastVideoFrame, 0, 0, canvas.width, canvas.height);
+            // Add a dark tint to make neon colors pop
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+        }
+
+        if (isPlaying) {
+            updatePhysics();
+            drawBall();
+        }
+        
+        drawHands();
+        requestAnimationFrame(gameLoop);
+    }
+
+    function updatePhysics() {
+        // Difficulty scaling
+        const currentGravity = ball.gravity + (score * 0.015);
+        
+        ball.vy += currentGravity;
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        
+        // Trail history
+        ball.history.push({x: ball.x, y: ball.y});
+        if (ball.history.length > 8) ball.history.shift();
+
+        // Wall collisions
+        if (ball.x - ball.radius < 0) {
+            ball.x = ball.radius;
+            ball.vx *= -0.8;
+        } else if (ball.x + ball.radius > canvas.width) {
+            ball.x = canvas.width - ball.radius;
+            ball.vx *= -0.8;
+        }
+
+        // Ceiling bounce
+        if (ball.y - ball.radius < 0) {
+            ball.y = ball.radius;
+            ball.vy = Math.abs(ball.vy) * 0.5; 
+        }
+
+        // Hand collisions
+        let hit = false;
+        for (const hand of handsData) {
+            for (const pt of hand) {
+                // Flip X coordinate to match the mirrored video
+                const px = (1 - pt.x) * canvas.width;
+                const py = pt.y * canvas.height;
+                
+                const dx = ball.x - px;
+                const dy = ball.y - py;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                // If collision and ball is generally falling downward
+                if (dist < ball.radius + 20 && ball.vy > -2) {
+                    ball.vy = -14 - (Math.random() * 4); 
+                    ball.vx += (dx / dist) * 6; // Horizontal deflection
+                    ball.vx = Math.max(-12, Math.min(12, ball.vx)); // Cap horizontal speed
+                    
+                    score++;
+                    document.getElementById('score').innerText = score;
+                    hit = true;
+                    
+                    // VFX trigger
+                    ball.color = '#ffffff';
+                    ball.pulse = 15;
+                    setTimeout(() => { if(isPlaying) ball.color = '#66fcf1'; }, 150);
+                    
+                    break;
+                }
+            }
+            if(hit) break;
+        }
+
+        // Death Floor
+        if (ball.y - ball.radius > canvas.height) gameOver();
+    }
+
+    function drawBall() {
+        // Draw Trail
+        if (ball.history.length > 0) {
+            ctx.beginPath();
+            ctx.moveTo(ball.history[0].x, ball.history[0].y);
+            for (let i = 1; i < ball.history.length; i++) {
+                ctx.lineTo(ball.history[i].x, ball.history[i].y);
+            }
+            ctx.strokeStyle = 'rgba(102, 252, 241, 0.3)';
+            ctx.lineWidth = ball.radius * 1.2;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+        }
+
+        // Draw Ball
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.radius, 0, 2 * Math.PI);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = ball.color;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Pulse VFX
+        if (ball.pulse > 0) {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius + ball.pulse, 0, 2 * Math.PI);
+            ctx.strokeStyle = `rgba(102, 252, 241, ${ball.pulse / 15})`;
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            ball.pulse -= 1;
+        }
+    }
+
+    function drawHands() {
+        for (const hand of handsData) {
+            // Draw skeleton lines
+            ctx.strokeStyle = 'rgba(102, 252, 241, 0.6)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for (const [startIdx, endIdx] of HAND_CONNECTIONS) {
+                const startPt = hand[startIdx];
+                const endPt = hand[endIdx];
+                ctx.moveTo((1 - startPt.x) * canvas.width, startPt.y * canvas.height);
+                ctx.lineTo((1 - endPt.x) * canvas.width, endPt.y * canvas.height);
+            }
+            ctx.stroke();
+            
+            // Draw joints
+            ctx.fillStyle = '#ff0055';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < hand.length; i++) {
+                const pt = hand[i];
+                const x = (1 - pt.x) * canvas.width;
+                const y = pt.y * canvas.height;
+                
+                ctx.beginPath();
+                // Make finger tips slightly larger
+                const radius = [4, 8, 12, 16, 20].includes(i) ? 7 : 4;
+                ctx.arc(x, y, radius, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+    }
+
+    // Start rendering loop independently of camera FPS
+    gameLoop();
+</script>
+</body>
+</html>
