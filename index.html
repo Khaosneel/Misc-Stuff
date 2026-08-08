@@ -175,6 +175,8 @@
     let isPlaying = false;
     let score = 0;
     let highScore = 0;
+    let lastTime = 0;
+    const TIME_SCALE = 0.06; // A multiplier to convert ms to a manageable physics scale
     
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -260,6 +262,7 @@
             pulse: 0,
             history: []
         };
+        lastTime = 0;
         isPlaying = true;
     }
 
@@ -278,23 +281,32 @@
     }
 
     // --- Rendering Loop ---
-    function gameLoop() {
+    function gameLoop(timestamp) {
+        // Calculate Delta Time
+        if (!lastTime) lastTime = timestamp;
+        let deltaTime = timestamp - lastTime;
+        lastTime = timestamp;
+
+        // Cap deltaTime to prevent massive physics jumps if the user switches browser tabs
+        if (deltaTime > 100) deltaTime = 16; 
+
+        // Apply our scale to keep the math numbers manageable
+        const dt = deltaTime * TIME_SCALE; 
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // Draw Flipped Video Background (Mirrors player movement intuitively)
         if (lastVideoFrame) {
             ctx.save();
             ctx.translate(canvas.width, 0);
             ctx.scale(-1, 1);
             ctx.drawImage(lastVideoFrame, 0, 0, canvas.width, canvas.height);
-            // Add a dark tint to make neon colors pop
             ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.restore();
         }
 
         if (isPlaying) {
-            updatePhysics();
+            updatePhysics(dt); // Pass dt to the physics engine
             drawBall();
         }
         
@@ -302,15 +314,16 @@
         requestAnimationFrame(gameLoop);
     }
 
-    function updatePhysics() {
-        // Difficulty scaling
-        const currentGravity = ball.gravity + (score * 0.015);
+    function updatePhysics(dt) {
+        // Difficulty scaling (scale this by dt too!)
+        const currentGravity = (ball.gravity + (score * 0.015)) * dt;
         
         ball.vy += currentGravity;
-        ball.x += ball.vx;
-        ball.y += ball.vy;
         
-        // Trail history
+        // Multiply velocity by dt when applying it to position
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
+        
         ball.history.push({x: ball.x, y: ball.y});
         if (ball.history.length > 8) ball.history.shift();
 
@@ -329,11 +342,9 @@
             ball.vy = Math.abs(ball.vy) * 0.5; 
         }
 
-        // Hand collisions
         let hit = false;
         for (const hand of handsData) {
             for (const pt of hand) {
-                // Flip X coordinate to match the mirrored video
                 const px = (1 - pt.x) * canvas.width;
                 const py = pt.y * canvas.height;
                 
@@ -341,17 +352,16 @@
                 const dy = ball.y - py;
                 const dist = Math.sqrt(dx * dx + dy * dy);
                 
-                // If collision and ball is generally falling downward
                 if (dist < ball.radius + 20 && ball.vy > -2) {
                     ball.vy = -14 - (Math.random() * 4); 
-                    ball.vx += (dx / dist) * 6; // Horizontal deflection
-                    ball.vx = Math.max(-12, Math.min(12, ball.vx)); // Cap horizontal speed
+                    ball.vx += (dx / dist) * 6; 
+                    ball.vx = Math.max(-12, Math.min(12, ball.vx)); 
                     
+                    playSound('bounce');
                     score++;
                     document.getElementById('score').innerText = score;
                     hit = true;
                     
-                    // VFX trigger
                     ball.color = '#ffffff';
                     ball.pulse = 15;
                     setTimeout(() => { if(isPlaying) ball.color = '#66fcf1'; }, 150);
@@ -362,7 +372,6 @@
             if(hit) break;
         }
 
-        // Death Floor
         if (ball.y - ball.radius > canvas.height) gameOver();
     }
 
