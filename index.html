@@ -357,7 +357,6 @@
                     ball.vx += (dx / dist) * 6; 
                     ball.vx = Math.max(-12, Math.min(12, ball.vx)); 
                     
-                    playSound('bounce');
                     score++;
                     document.getElementById('score').innerText = score;
                     hit = true;
